@@ -1,0 +1,29 @@
+name: Daily Market Digest
+
+on:
+  schedule:
+    # 6:30 AM Pacific = 13:30 UTC (adjust for DST — during PDT use 13:30, during PST use 14:30)
+    - cron: "30 13 * * 1-5"   # Mon–Fri only
+  workflow_dispatch:            # allows manual trigger from GitHub UI
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run digest
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python digest.py
