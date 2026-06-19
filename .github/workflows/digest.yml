@@ -2,8 +2,11 @@ name: Daily Market Digest
 
 on:
   schedule:
-    # 6:30 AM Pacific = 13:30 UTC (adjust for DST — during PDT use 13:30, during PST use 14:30)
-    - cron: "30 13 * * 1-5"   # Mon–Fri only
+    # Target 6:23 AM Pacific. GitHub-scheduled crons run late (often 5-30 min),
+    # so timing isn't exact; :23 is off-peak which helps minimize the drift.
+    #   PDT (summer, UTC-7): 6:23 AM = 13:23 UTC  ← currently active
+    #   PST (winter, UTC-8): 6:23 AM = 14:23 UTC  ← switch to this when DST ends
+    - cron: "23 13 * * 1-5"   # Mon–Fri only
   workflow_dispatch:            # allows manual trigger from GitHub UI
 
 jobs:

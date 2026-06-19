@@ -8,6 +8,7 @@ A daily market briefing bot that posts to Discord every weekday morning via webh
 
 - **AI Summary** — Claude-written 4–6 sentence market briefing
 - **Broad Market** — SPY, QQQ, DIA, IWM + VIX + all 11 sector ETFs
+- **Treasury Yields** — 30-Year Treasury yield (`^TYX`) with its daily move in basis points
 - **Top Movers** — Top 5 gainers and losers from S&P 500 sample
 - **Watchlist** — Your custom tracked tickers
 
@@ -59,7 +60,9 @@ Go to Actions → Daily Market Digest → Run workflow to trigger it immediately
 
 ## Timing Note
 
-The cron runs at `13:30 UTC` which is `6:30 AM PDT` (summer). During winter (PST), change it to `14:30 UTC` to keep 6:30 AM local time.
+The cron targets **6:23 AM Pacific**. It's set to fire at `13:23 UTC` = `6:23 AM PDT` (summer). During winter (PST), change it to `14:23 UTC` to keep the same local time.
+
+⚠️ **GitHub-scheduled workflows are best-effort and often run 5–30 minutes late** (queues are busiest at the top of the hour). That's why delivery time drifts. We schedule at `:50` rather than on the hour to minimize the drift, but exact timing isn't guaranteed by GitHub. If you need precise, reliable timing, trigger the workflow from an external scheduler (e.g. cron-job.org) via the [`workflow_dispatch` API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event) instead of relying on `schedule`.
 
 ---
 

@@ -17,6 +17,9 @@ BROAD_MARKET = {
     "Sectors":  ["XLK", "XLE", "XLF", "XLV", "XLY", "XLP", "XLI", "XLB", "XLU", "XLRE", "XLC"],
 }
 
+# CBOE 30-Year Treasury Yield index (quoted directly as a yield, e.g. 4.50 = 4.50%)
+TREASURY_30Y = "^TYX"
+
 SP500_SAMPLE = [
     "AAPL","MSFT","NVDA","GOOGL","AMZN","META","TSLA","BRK-B","JPM","UNH",
     "XOM","JNJ","V","PG","MA","HD","CVX","MRK","ABBV","PEP","KO","AVGO",
@@ -27,7 +30,55 @@ SP500_SAMPLE = [
     "MU","ADI","KLAC","LRCX","SNPS","CDNS","FTNT","MRVL","ON","NXPI",
 ]
 
+# Human-readable names for the fixed universe (no network cost). Custom watchlist
+# tickers not listed here fall back to a best-effort yfinance lookup.
+TICKER_NAMES = {
+    # Indices / broad-market ETFs
+    "SPY": "S&P 500 ETF", "QQQ": "Nasdaq 100 ETF", "DIA": "Dow Jones ETF",
+    "IWM": "Russell 2000 ETF", "^VIX": "Volatility Index", "^TYX": "30Y Treasury Yield",
+    # Sector SPDRs
+    "XLK": "Technology", "XLE": "Energy", "XLF": "Financials", "XLV": "Health Care",
+    "XLY": "Consumer Discretionary", "XLP": "Consumer Staples", "XLI": "Industrials",
+    "XLB": "Materials", "XLU": "Utilities", "XLRE": "Real Estate",
+    "XLC": "Communication Services",
+    # S&P 500 sample (companies)
+    "AAPL": "Apple", "MSFT": "Microsoft", "NVDA": "Nvidia", "GOOGL": "Alphabet",
+    "AMZN": "Amazon", "META": "Meta Platforms", "TSLA": "Tesla",
+    "BRK-B": "Berkshire Hathaway", "JPM": "JPMorgan Chase", "UNH": "UnitedHealth",
+    "XOM": "ExxonMobil", "JNJ": "Johnson & Johnson", "V": "Visa",
+    "PG": "Procter & Gamble", "MA": "Mastercard", "HD": "Home Depot",
+    "CVX": "Chevron", "MRK": "Merck", "ABBV": "AbbVie", "PEP": "PepsiCo",
+    "KO": "Coca-Cola", "AVGO": "Broadcom", "LLY": "Eli Lilly", "COST": "Costco",
+    "WMT": "Walmart", "BAC": "Bank of America", "MCD": "McDonald's",
+    "CRM": "Salesforce", "TMO": "Thermo Fisher", "ACN": "Accenture",
+    "CSCO": "Cisco", "ABT": "Abbott", "DHR": "Danaher", "TXN": "Texas Instruments",
+    "NKE": "Nike", "ADBE": "Adobe", "WFC": "Wells Fargo", "PM": "Philip Morris",
+    "NEE": "NextEra Energy", "RTX": "RTX (Raytheon)", "AMGN": "Amgen", "UPS": "UPS",
+    "QCOM": "Qualcomm", "INTU": "Intuit", "HON": "Honeywell", "IBM": "IBM",
+    "CAT": "Caterpillar", "GS": "Goldman Sachs", "SPGI": "S&P Global",
+    "BLK": "BlackRock", "SBUX": "Starbucks", "AMD": "AMD", "GILD": "Gilead Sciences",
+    "AXP": "American Express", "DE": "Deere", "MMM": "3M", "BA": "Boeing",
+    "C": "Citigroup", "MDLZ": "Mondelez", "ISRG": "Intuitive Surgical",
+    "REGN": "Regeneron", "VRTX": "Vertex Pharma", "ZTS": "Zoetis", "NOW": "ServiceNow",
+    "PANW": "Palo Alto Networks", "AMAT": "Applied Materials", "MU": "Micron",
+    "ADI": "Analog Devices", "KLAC": "KLA Corp", "LRCX": "Lam Research",
+    "SNPS": "Synopsys", "CDNS": "Cadence Design", "FTNT": "Fortinet",
+    "MRVL": "Marvell", "ON": "ON Semiconductor", "NXPI": "NXP Semiconductors",
+}
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def resolve_name(ticker: str) -> str:
+    """Human-readable name for a ticker. Static map for the fixed universe (fast,
+    no network); best-effort yfinance lookup for anything else (e.g. custom
+    watchlist tickers). Returns "" if no name can be found."""
+    if ticker in TICKER_NAMES:
+        return TICKER_NAMES[ticker]
+    try:
+        info = yf.Ticker(ticker).get_info()
+        return info.get("shortName") or info.get("longName") or ""
+    except Exception:
+        return ""
 
 def load_watchlist():
     try:
@@ -55,6 +106,7 @@ def fetch_quote(ticker: str) -> dict | None:
 
         return {
             "ticker":      ticker,
+            "name":        resolve_name(ticker),
             "price":       round(price, 2),
             "prev_close":  round(prev, 2),
             "change_pct":  round(change_pct, 2),
@@ -104,7 +156,28 @@ def arrow(pct: float) -> str:
     return "🟢" if pct >= 0 else "🔴"
 
 def fmt_quote(q: dict) -> str:
-    return f"{arrow(q['change_pct'])} **{q['ticker']}** ${q['price']} ({q['change_pct']:+.2f}%)"
+    name = f" ({q['name']})" if q.get("name") else ""
+    return f"{arrow(q['change_pct'])} **{q['ticker']}**{name} ${q['price']} ({q['change_pct']:+.2f}%)"
+
+def fetch_yield(ticker: str) -> dict | None:
+    """Fetch a Treasury yield index (e.g. ^TYX). Keeps full precision so the
+    basis-point move is accurate (rounding to 2dp first would distort it)."""
+    try:
+        info = yf.Ticker(ticker).fast_info
+        prev  = info.previous_close or 0
+        level = info.last_price      or 0
+        if prev == 0:
+            return None
+        return {
+            "yield_pct":  round(level, 2),
+            "change_bps": round((level - prev) * 100, 1),
+        }
+    except Exception:
+        return None
+
+def fmt_yield(q: dict, label: str) -> str:
+    """Format a Treasury yield: show the level (%) and the day's move in basis points."""
+    return f"{arrow(q['change_bps'])} **{label}** {q['yield_pct']:.2f}% ({q['change_bps']:+.1f} bps)"
 
 # ── Claude summary ────────────────────────────────────────────────────────────
 
@@ -119,6 +192,7 @@ Here is today's market snapshot data:
 Write a 4-6 sentence natural language summary covering:
 - Overall market tone (risk-on/risk-off, bullish/bearish)
 - Key sector themes
+- The 30-year Treasury yield and what its move signals for rates/bonds
 - Any standout movers worth watching
 - One sentence on what traders should watch today
 
@@ -133,7 +207,7 @@ Keep it punchy, direct, no fluff. No bullet points — flowing prose only."""
 
 # ── Discord embeds ────────────────────────────────────────────────────────────
 
-def build_embeds(broad: dict, gainers: list, losers: list, watchlist_data: list, spikes: list, summary: str) -> list:
+def build_embeds(broad: dict, treasury: dict | None, gainers: list, losers: list, watchlist_data: list, spikes: list, summary: str) -> list:
     today = datetime.now().strftime("%A, %B %d %Y")
     embeds = []
 
@@ -159,6 +233,15 @@ def build_embeds(broad: dict, gainers: list, losers: list, watchlist_data: list,
             {"name": "Sectors",    "value": sector_lines or "N/A", "inline": False},
         ]
     })
+
+    # ── 2b. Treasury Yields ──────────────────────────────────────────────────────
+    if treasury:
+        embeds.append({
+            "title": "🏦 Treasury Yields",
+            "color": 0xED4245,
+            "description": fmt_yield(treasury, "30Y Treasury"),
+            "footer": {"text": "Rising yields = falling bond prices. Watch the long end."}
+        })
 
     # ── 3. Top Movers ──────────────────────────────────────────────────────────
     gainer_lines = "\n".join(fmt_quote(q) for q in gainers)
@@ -205,6 +288,9 @@ def main():
     for group, tickers in BROAD_MARKET.items():
         broad[group] = fetch_group(tickers)
 
+    print("Fetching 30Y Treasury yield...")
+    treasury = fetch_yield(TREASURY_30Y)
+
     print("Fetching top movers...")
     gainers, losers = get_top_movers(5)
 
@@ -229,6 +315,7 @@ def main():
         "indices":     broad["Indices"],
         "vix":         broad["Volatility"],
         "sectors":     broad["Sectors"],
+        "treasury_30y_yield": treasury,
         "top_gainers": gainers,
         "top_losers":  losers,
         "watchlist":   watchlist_data,
@@ -247,7 +334,7 @@ def main():
     summary = get_ai_summary(market_data)
 
     print("Building Discord embeds...")
-    embeds = build_embeds(broad, gainers, losers, watchlist_data, spikes, summary)
+    embeds = build_embeds(broad, treasury, gainers, losers, watchlist_data, spikes, summary)
 
     print("Posting to Discord...")
     payload = {"embeds": embeds}
