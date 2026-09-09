@@ -11,6 +11,8 @@ A daily market briefing bot that posts to Discord every weekday morning via webh
 - **Treasury Yields** — 30-Year Treasury yield (`^TYX`) with its daily move in basis points
 - **Top Movers** — Top 5 gainers and losers from S&P 500 sample
 - **Watchlist** — Your custom tracked tickers
+- **Crypto Watchlist** — Your tracked coins, priced against the last equity close
+- **Crypto Alerts** — Only fires when a watchlist coin moves **10%+**
 
 ---
 
@@ -40,15 +42,34 @@ That's it — it runs automatically Mon–Fri at 6:30 AM Pacific.
 
 ## Customizing the Watchlist
 
-Edit `watchlist.json` and add/remove tickers:
+Edit `watchlist.json` and add/remove tickers. Stocks go in `watchlist`, coins in
+`crypto` using yfinance's `<SYMBOL>-USD` pair format:
 
 ```json
 {
-  "watchlist": ["TSLA", "NVDA", "AMD", "AAPL", "MSFT"]
+  "watchlist": ["TSLA", "NVDA", "AMD", "AAPL", "MSFT"],
+  "crypto": ["BTC-USD", "ETH-USD", "SOL-USD"]
 }
 ```
 
 Commit and push — the next run will pick up the changes.
+
+### Crypto notes
+
+**Crypto is priced against the last equity close, not the prior calendar day.**
+Crypto trades 24/7 but the digest only runs Mon–Fri, so a naive "since yesterday"
+number would silently drop the weekend. Each run derives the last completed equity
+session from SPY's daily bars, then measures every coin from that same date — which
+handles market holidays for free. On Tue Sep 8 2026, for example, that reference
+resolves back to **Fri Sep 4**, skipping the weekend *and* Labor Day. The embed
+footer always states which close it used.
+
+**Alerts trigger on price, not volume.** A 2x volume print is routine for major
+coins; a 10% daily move is not. Volume ratio is shown on an alert line as context.
+Change the threshold via `CRYPTO_ALERT_PCT` in `digest.py`.
+
+**Crypto is excluded from the ⚡ Volume Spikes section**, which stays equities-only.
+Crypto volume surfaces only inside a 10%+ alert.
 
 ---
 

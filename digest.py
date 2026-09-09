@@ -20,6 +20,10 @@ BROAD_MARKET = {
 # CBOE 30-Year Treasury Yield index (quoted directly as a yield, e.g. 4.50 = 4.50%)
 TREASURY_30Y = "^TYX"
 
+# Crypto alerts trigger on price, not volume: a 2x volume print is routine for
+# major coins, whereas a 10% daily move is not.
+CRYPTO_ALERT_PCT = 10.0
+
 SP500_SAMPLE = [
     "AAPL","MSFT","NVDA","GOOGL","AMZN","META","TSLA","BRK-B","JPM","UNH",
     "XOM","JNJ","V","PG","MA","HD","CVX","MRK","ABBV","PEP","KO","AVGO",
@@ -64,6 +68,14 @@ TICKER_NAMES = {
     "ADI": "Analog Devices", "KLAC": "KLA Corp", "LRCX": "Lam Research",
     "SNPS": "Synopsys", "CDNS": "Cadence Design", "FTNT": "Fortinet",
     "MRVL": "Marvell", "ON": "ON Semiconductor", "NXPI": "NXP Semiconductors",
+    # Crypto (yfinance quotes these as "<SYMBOL>-USD" pairs)
+    "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum", "SOL-USD": "Solana",
+    "XRP-USD": "XRP", "DOGE-USD": "Dogecoin", "ADA-USD": "Cardano",
+    "AVAX-USD": "Avalanche", "LINK-USD": "Chainlink", "DOT-USD": "Polkadot",
+    "LTC-USD": "Litecoin", "BCH-USD": "Bitcoin Cash",
+    "XMR-USD": "Monero", "VET-USD": "VeChain",
+    # Watchlist additions outside the S&P sample
+    "VST": "Vistra", "SPCX": "Space Exploration Technologies",
 }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -80,11 +92,13 @@ def resolve_name(ticker: str) -> str:
     except Exception:
         return ""
 
-def load_watchlist():
+def load_watchlist(key: str = "watchlist"):
+    """Read one ticker list from the watchlist file. A missing key yields [], so
+    a watchlist.json without a "crypto" section still works unchanged."""
     try:
         with open(WATCHLIST_FILE) as f:
             data = json.load(f)
-            return data.get("watchlist", [])
+            return data.get(key, [])
     except FileNotFoundError:
         return []
 
@@ -108,6 +122,7 @@ def fetch_quote(ticker: str) -> dict | None:
             "ticker":      ticker,
             "name":        resolve_name(ticker),
             "price":       round(price, 2),
+            "price_raw":   price,
             "prev_close":  round(prev, 2),
             "change_pct":  round(change_pct, 2),
             "avg_volume":  avg_vol,
@@ -179,6 +194,76 @@ def fmt_yield(q: dict, label: str) -> str:
     """Format a Treasury yield: show the level (%) and the day's move in basis points."""
     return f"{arrow(q['change_bps'])} **{label}** {q['yield_pct']:.2f}% ({q['change_bps']:+.1f} bps)"
 
+# ── Crypto ────────────────────────────────────────────────────────────────────
+
+def prior_equity_close_date() -> date | None:
+    """Date of the last completed equity session, read off SPY's daily bars.
+
+    Crypto prints a bar every calendar day; equities don't. Anchoring crypto to
+    this date keeps both halves of the digest measuring the same window, and it
+    handles weekends and market holidays with no calendar logic -- on a Monday
+    it resolves to Friday, and after a holiday it skips that day too."""
+    try:
+        hist  = yf.Ticker("SPY").history(period="10d", interval="1d")
+        today = date.today()
+        prior = [d.date() for d in hist.index if d.date() < today]
+        return prior[-1] if prior else None
+    except Exception:
+        return None
+
+def fetch_crypto_quote(ticker: str, ref_date: date | None) -> dict | None:
+    """Quote a crypto pair, re-based to the last equity close.
+
+    yfinance's previous_close for crypto is the prior *calendar* day, so an
+    unadjusted Monday digest would report the move since Sunday and silently
+    drop the entire weekend. Falls back to the plain previous-close change if
+    the history lookup fails, so a bad fetch degrades rather than breaks."""
+    q = fetch_quote(ticker)
+    if not q or ref_date is None:
+        return q
+    try:
+        hist   = yf.Ticker(ticker).history(period="10d", interval="1d")
+        closes = {d.date(): float(c) for d, c in zip(hist.index, hist["Close"])}
+        ref    = closes.get(ref_date)
+        if ref:
+            q["prev_close"] = round(ref, 2)
+            q["change_pct"] = round((q["price_raw"] - ref) / ref * 100, 2)
+            q["ref_date"]   = ref_date
+    except Exception:
+        pass
+    return q
+
+def fmt_crypto_price(p: float) -> str:
+    """Crypto spans ~$0.10 to ~$80,000, so a fixed 2dp either clutters BTC with
+    meaningless cents or flattens sub-dollar coins to two significant digits."""
+    if p >= 1000:
+        return f"{p:,.0f}"
+    if p >= 1:
+        return f"{p:,.2f}"
+    if p >= 0.001:
+        return f"{p:.4f}"
+    return f"{p:.8f}"
+
+def fmt_crypto_quote(q: dict) -> str:
+    name  = f" ({q['name']})" if q.get("name") else ""
+    sym   = q["ticker"].removesuffix("-USD")
+    price = fmt_crypto_price(q.get("price_raw", q["price"]))
+    return f"{arrow(q['change_pct'])} **{sym}**{name} ${price} ({q['change_pct']:+.2f}%)"
+
+def detect_crypto_alerts(quotes: list[dict], threshold: float = CRYPTO_ALERT_PCT) -> list[dict]:
+    """Watchlist coins that moved >= threshold% since the last equity close.
+    Only ever fed the crypto watchlist, so nothing outside it can alert."""
+    alerts = [q for q in quotes if abs(q.get("change_pct", 0)) >= threshold]
+    alerts.sort(key=lambda x: abs(x["change_pct"]), reverse=True)
+    return alerts
+
+def fmt_crypto_alert(q: dict) -> str:
+    sym       = q["ticker"].removesuffix("-USD")
+    direction = "📈" if q["change_pct"] >= 0 else "📉"
+    price     = fmt_crypto_price(q.get("price_raw", q["price"]))
+    vol       = f" | {q['spike_ratio']}x avg vol" if q.get("spike_ratio") else ""
+    return f"🚨 **{sym}** {direction} {q['change_pct']:+.2f}% | ${price}{vol}"
+
 # ── Claude summary ────────────────────────────────────────────────────────────
 
 def get_ai_summary(market_data: dict) -> str:
@@ -207,7 +292,9 @@ Keep it punchy, direct, no fluff. No bullet points — flowing prose only."""
 
 # ── Discord embeds ────────────────────────────────────────────────────────────
 
-def build_embeds(broad: dict, treasury: dict | None, gainers: list, losers: list, watchlist_data: list, spikes: list, summary: str) -> list:
+def build_embeds(broad: dict, treasury: dict | None, gainers: list, losers: list,
+                 watchlist_data: list, spikes: list, crypto_data: list,
+                 crypto_alerts: list, crypto_ref: "date | None", summary: str) -> list:
     today = datetime.now().strftime("%A, %B %d %Y")
     embeds = []
 
@@ -265,6 +352,32 @@ def build_embeds(broad: dict, treasury: dict | None, gainers: list, losers: list
             "description": wl_lines
         })
 
+    # ── 4b. Crypto Watchlist ───────────────────────────────────────────────────
+    if crypto_data:
+        ref_note = (
+            f"Change vs. {crypto_ref.strftime('%a %b %d')} close — the last equity "
+            "session, so crypto and stocks cover the same window."
+            if crypto_ref else "Change vs. prior daily close."
+        )
+        embeds.append({
+            "title": "🪙 Crypto Watchlist",
+            "color": 0xF7931A,
+            "description": "\n".join(fmt_crypto_quote(q) for q in crypto_data),
+            "footer": {"text": ref_note},
+        })
+
+    # ── 4c. Crypto Alerts ──────────────────────────────────────────────────────
+    if crypto_alerts:
+        embeds.append({
+            "title": "🚨 Crypto Alerts",
+            "description": (
+                f"Watchlist coins that moved **{CRYPTO_ALERT_PCT:.0f}%+**:\n\n"
+                + "\n".join(fmt_crypto_alert(q) for q in crypto_alerts)
+            ),
+            "color": 0xF7931A,
+            "footer": {"text": "Volume ratio shown as context, not as a trigger."},
+        })
+
     # ── 5. Volume Spikes ───────────────────────────────────────────────────────
     if spikes:
         spike_lines = "\n".join(fmt_spike(q) for q in spikes)
@@ -297,6 +410,12 @@ def main():
     print("Fetching watchlist...")
     watchlist_tickers = load_watchlist()
     watchlist_data    = fetch_group(watchlist_tickers) if watchlist_tickers else []
+
+    print("Fetching crypto watchlist...")
+    crypto_tickers = load_watchlist("crypto")
+    crypto_ref     = prior_equity_close_date() if crypto_tickers else None
+    crypto_data    = [q for q in (fetch_crypto_quote(t, crypto_ref) for t in crypto_tickers) if q]
+    crypto_alerts  = detect_crypto_alerts(crypto_data)
 
     print("Detecting volume spikes...")
     # Check spikes across watchlist + top movers combined
@@ -334,7 +453,8 @@ def main():
     summary = get_ai_summary(market_data)
 
     print("Building Discord embeds...")
-    embeds = build_embeds(broad, treasury, gainers, losers, watchlist_data, spikes, summary)
+    embeds = build_embeds(broad, treasury, gainers, losers, watchlist_data, spikes,
+                          crypto_data, crypto_alerts, crypto_ref, summary)
 
     print("Posting to Discord...")
     payload = {"embeds": embeds}

@@ -8,5 +8,12 @@
     "NOW",
     "VST",
     "SPCX"
+  ],
+  "crypto": [
+    "BTC-USD",
+    "ETH-USD",
+    "SOL-USD",
+    "XMR-USD",
+    "VET-USD"
   ]
 }
